@@ -1,0 +1,409 @@
+// AgricSec — Prisma Schema
+// PostgreSQL · Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────
+
+enum Role {
+  FARMER
+  AGRONOMIST
+  ADMIN
+}
+
+enum CropStatus {
+  PLANNED
+  PLANTED
+  GROWING
+  HARVESTED
+  FAILED
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum PestReportStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+}
+
+enum ResourceType {
+  WATER
+  FERTILIZER
+  PESTICIDE
+  EQUIPMENT
+  SEED
+  FUEL
+  OTHER
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum PostCategory {
+  GENERAL
+  ADVISORY
+  QUESTION
+  MARKET_INSIGHT
+  WEATHER_UPDATE
+}
+
+// ─────────────────────────────────────────
+// USER & AUTH
+// ─────────────────────────────────────────
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  phone         String?
+  role          Role      @default(FARMER)
+  avatarUrl     String?
+  isVerified    Boolean   @default(false)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Auth
+  refreshTokens RefreshToken[]
+
+  // Farm ownership
+  farms         Farm[]
+
+  // Activity
+  pestReports   PestReport[]
+  transactions  FinancialTransaction[]
+  posts         Post[]
+  comments      Comment[]
+  likes         Like[]
+  notifications Notification[]
+  weatherAlerts WeatherAlert[]
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────
+// FARM
+// ─────────────────────────────────────────
+
+model Farm {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  latitude    Float
+  longitude   Float
+  areaHectares Float
+  country     String
+  region      String
+  address     String?
+  soilType    String?
+  ownerId     String
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  crops           Crop[]
+  weatherLogs     WeatherLog[]
+  weatherAlerts   WeatherAlert[]
+  pestReports     PestReport[]
+  resources       Resource[]
+  transactions    FinancialTransaction[]
+
+  @@index([ownerId])
+}
+
+// ─────────────────────────────────────────
+// CROP
+// ─────────────────────────────────────────
+
+model Crop {
+  id              String     @id @default(uuid())
+  name            String
+  variety         String?
+  farmId          String
+  farm            Farm       @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  plotAreaHectares Float
+  status          CropStatus @default(PLANNED)
+  plantedAt       DateTime?
+  expectedHarvestAt DateTime?
+  actualHarvestAt DateTime?
+  yieldKg         Float?
+  notes           String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  pestReports     PestReport[]
+  transactions    FinancialTransaction[]
+
+  @@index([farmId])
+}
+
+// ─────────────────────────────────────────
+// WEATHER
+// ─────────────────────────────────────────
+
+model WeatherLog {
+  id              String   @id @default(uuid())
+  farmId          String
+  farm            Farm     @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  recordedAt      DateTime
+  temperatureC    Float
+  humidity        Float    // percentage
+  rainfallMm      Float    @default(0)
+  windSpeedKph    Float    @default(0)
+  uvIndex         Float?
+  conditionCode   String?  // WMO weather code
+  conditionText   String?
+  source          String   @default("openmeteo") // data provider
+  createdAt       DateTime @default(now())
+
+  @@index([farmId, recordedAt])
+}
+
+model WeatherAlert {
+  id          String        @id @default(uuid())
+  farmId      String
+  farm        Farm          @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  severity    AlertSeverity
+  title       String
+  message     String
+  isRead      Boolean       @default(false)
+  triggeredAt DateTime      @default(now())
+
+  @@index([farmId])
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────
+// MARKET PRICE
+// ─────────────────────────────────────────
+
+model MarketPrice {
+  id          String   @id @default(uuid())
+  commodity   String   // e.g. "maize", "wheat"
+  market      String   // market/location name
+  country     String
+  pricePerKg  Float
+  currency    String   @default("USD")
+  recordedAt  DateTime
+  source      String?
+  createdAt   DateTime @default(now())
+
+  @@unique([commodity, market, recordedAt])
+  @@index([commodity, country])
+  @@index([recordedAt])
+}
+
+model PriceAlert {
+  id          String   @id @default(uuid())
+  userId      String
+  commodity   String
+  country     String
+  targetPrice Float
+  condition   String   // "above" | "below"
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────
+// PEST & DISEASE
+// ─────────────────────────────────────────
+
+model PestReport {
+  id          String           @id @default(uuid())
+  farmId      String
+  farm        Farm             @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  cropId      String?
+  crop        Crop?            @relation(fields: [cropId], references: [id], onDelete: SetNull)
+  reportedById String
+  reportedBy  User             @relation(fields: [reportedById], references: [id])
+  pestName    String
+  description String
+  severity    AlertSeverity
+  status      PestReportStatus @default(OPEN)
+  latitude    Float?
+  longitude   Float?
+  imageUrls   String[]         @default([])
+  aiAnalysis  String?          // AI-generated diagnosis
+  recommendation String?
+  resolvedAt  DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([farmId])
+  @@index([reportedById])
+}
+
+// ─────────────────────────────────────────
+// RESOURCE MANAGEMENT
+// ─────────────────────────────────────────
+
+model Resource {
+  id          String       @id @default(uuid())
+  farmId      String
+  farm        Farm         @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  name        String
+  type        ResourceType
+  unit        String       // "liters", "kg", "units"
+  quantity    Float
+  minQuantity Float        @default(0) // threshold for low-stock alert
+  notes       String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  usageLogs   ResourceUsageLog[]
+
+  @@index([farmId])
+}
+
+model ResourceUsageLog {
+  id          String   @id @default(uuid())
+  resourceId  String
+  resource    Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  quantityUsed Float
+  purpose     String?
+  usedAt      DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@index([resourceId])
+}
+
+// ─────────────────────────────────────────
+// FINANCIAL TRACKING
+// ─────────────────────────────────────────
+
+model FinancialTransaction {
+  id          String          @id @default(uuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  farmId      String
+  farm        Farm            @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  cropId      String?
+  crop        Crop?           @relation(fields: [cropId], references: [id], onDelete: SetNull)
+  type        TransactionType
+  category    String          // "seed purchase", "harvest sale", "equipment", etc.
+  amount      Float
+  currency    String          @default("USD")
+  description String?
+  receiptUrl  String?
+  transactedAt DateTime
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([farmId])
+  @@index([userId])
+  @@index([transactedAt])
+}
+
+model Budget {
+  id          String   @id @default(uuid())
+  farmId      String   @unique
+  year        Int
+  totalBudget Float
+  currency    String   @default("USD")
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([farmId])
+}
+
+// ─────────────────────────────────────────
+// COMMUNITY / ADVISORY
+// ─────────────────────────────────────────
+
+model Post {
+  id          String       @id @default(uuid())
+  authorId    String
+  author      User         @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  title       String
+  body        String
+  category    PostCategory @default(GENERAL)
+  imageUrls   String[]     @default([])
+  isPublished Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  comments    Comment[]
+  likes       Like[]
+
+  @@index([authorId])
+  @@index([category])
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  body      String
+  parentId  String?  // nested replies
+  parent    Comment? @relation("CommentReplies", fields: [parentId], references: [id])
+  replies   Comment[] @relation("CommentReplies")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([postId])
+  @@index([authorId])
+}
+
+model Like {
+  id        String   @id @default(uuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+}
+
+// ─────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  type      String   // "weather", "market", "pest", "resource", "community"
+  isRead    Boolean  @default(false)
+  refId     String?  // optional foreign key to related entity
+  refType   String?  // e.g. "PestReport", "WeatherAlert"
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+}
